@@ -1,0 +1,308 @@
+---
+title: "advanved-vegan-following-tutorial"
+author: "Jen Thomas"
+date: "01/02/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This code is taken from the slides and examples in the Advanced Vegan Webinar. All comments and notes come from explanations by Gavin Simpson during the webinar: https://www.youtube.com/watch?v=PR1B_JkO49s
+
+## Import libraries
+
+
+```{r}
+library(vegan)
+```
+
+## Import data
+
+Use the data that is available within the Vegan package.
+
+```{r}
+data(varechem, varespec)
+```
+
+## Canonical correspondance analysis (CCA)
+
+Run a CCA using the formula method for CCA in R. Note that the . includes all of the parameters in the model. Parameters can be added separately to the model, though.
+
+```{r}
+cca1 <- cca(varespec ~ ., data = varechem)
+cca1
+```
+
+The inertia in the output shows the variance in the model. It also shows how it is partitioned. The line that says "constrained", shows how much variance is explained by the variables in the model. The "unconstrained" line shows the amount of variance that is leftover (in this case there are 9 remaining axes of variation). Ideally the unconstrained line will not show very much variation.
+
+## Redundancy analysis (RDA)
+
+RDA works in a similar way to CCA. 
+
+```{r}
+rda1 <- rda(varespec ~ ., data = varechem)
+rda1
+```
+
+The measure of inertia for the RDA is different. Note that the variance is not standardised to add up to 1.
+
+## Model terms
+
+Factors and interactions can all be added into the models, as well as just the variables as they are. 
+
+## Example (slide 14)
+
+```{r}
+mycca1 <- cca(varespec ~ N + P + K, data = varechem)
+mycca1
+```
+
+The output shows: 
+- there are three constrained axes which explain ~21 % of the variation. There are 20 unconstrained axes (residuals) and these explain about 79%. Most of the variation can be explained by the first two parameters (CCA1+CCA2 = 0.19+0.16 = 0.35) so perhaps we do not need the third (CCA3).
+- the eigenvalues for the unconstrained axes are quite large and the first two are larger than those for the constrained axes. Therefore, we might consider that we have not included some of the parameters in the model that maybe should have been included.
+
+If we investigate the results a bit further and get the eigenvalues for the constrained axes: 
+
+```{r}
+ev <- eigenvals(mycca1, model = "constrained")
+ev
+```
+
+This tells us about the variance of what is explained by these three variables. 
+
+To avoid distorting relationships in plots, we **scale** the diagram according to what it is we would like to focus on with the plot, i.e. the sites, species, or response between variables and the species, for example.
+
+When there are species that dominate the abundance, these have the largest variances and covariances, therefore if you have not rescaled, these can dominate. Using a modifier such as **hill** (for CCA) or **correlation** (for RDA) can help to standardise the scores. 
+
+We can also extract the axis scores: 
+
+```{r}
+cca1_scores <- scores(mycca1, choices = c(2,3), display = "sites", scaling = "sites", hill = TRUE) # We only want to look at axes 2 and 3. # If this was RDA, we would use correlation = TRUE instead of hill
+head(cca1_scores)
+```
+
+## Partial constrained ordinations
+
+Remove the effects of some variables first, then fit a model using the variables of interest. This is done using the Z parameter in the CCA function or with the Condition function. The following examples show how this is done to remove the effects of pH first, before fitting a model for Ca.
+
+```{r}
+pcca1 <- cca(X = varespec, 
+             Y = varechem[, "Ca", drop = FALSE],
+             Z = varechem[, "pH", drop = FALSE])
+pcca1
+
+pcca2 <- cca(varespec ~ Ca + Condition(pH), data = varechem)
+pcca2
+```
+
+The total variation in the output can be partitioned: the conditional line tells us how much variation can be explained by pH, constrained shows us how much variation can be explained by Ca after accounting for pH and the unconstrained variables. 
+
+## Plots
+
+```{r}
+plot(cca1) # by default this focusses on the species
+```
+It is easy to overplot here so this can be improved by focussing on separate aspects. 
+
+## Building models
+
+These ordination methods are simply regression methods and therefore it is important to think about the models that are being used. Only the important variables should be included in the models. All details about regression also apply.
+
+Consider whether the variables are correlated. Also, the more variables that are included, the more it becomes like fitting an unconstrained analysis.
+
+Could fit the following models: 
+- candidate models that test your hypotheses and then compare them
+- full model of well-chosen variables and then do a step-wise selection (be careful about doing the latter; one of the only options for model selection)
+
+Take care of: 
+- dependence between variables
+- when computing the variance inflation factor (VIF), look for collinearity between variables, e.g. Sulphur and Aluminium in the example below:
+
+```{r}
+vif.cca(cca1)
+```
+
+### Stepwise selection
+
+AIC does not really exist for RDA / CCA (there is no likelihood in these models) so ```ordistep()``` should be used. To do this, we select a simple model (lower) and then move up to higher model (sometimes the full model (upper)) using stepwise selection. This might include a permutation test, so to make it reproducible we should use a seed. This will keep going until we do not see any further improvement in the model.
+
+```{r}
+upr <- cca(varespec ~ ., data = varechem)
+lwr <- cca(varespec ~ 1, data = varechem)
+
+set.seed(1)
+
+mods <- ordistep(lwr, scope = formula(upr), trace = 0)
+mods
+```
+
+The output of this selection has selected the model ```varespec ~ Al + P + K```. This model explains about 31% of the variance in this dataset. Al had a very high VIF so removing this might mean that other variables would be included. 
+
+```{r}
+mods$anova
+```
+Using ANOVA shows us which variables had the largest explanatory power (in this case Al). We can see that K is right on the threshold of being added into the model (according to the P-value). 
+
+We can also try backwards selection: 
+
+```{r}
+mods2 <- step(upr, scope = list(lower = formula(lwr), upper = formula(upr)), trace = 0, test = "perm")
+mods2
+```
+
+Note that the output of the backwards selection gives us a different model to that produced by forwards selection. Note also that Al has not been chosen as a variable either. 
+
+Adjusted $R^2$ should be used in a regression model which can be adjusted according to the complexity of the model. This can also be used in the ordination models as well. (With the normal $R^2$ this would be inflated as you add more terms anyway, so it is not representative). See details on slide 37. 
+
+```{r}
+RsquareAdj(cca1)
+```
+Note that $R^2$ here makes it look like this was in fact a good model, but by looking at the adjusted $R^2$, we can see that in fact, it wasn't.
+
+There are problems with stepwise selection - it is better to stick to the model that tests your hypotheses if possible. To make this more robust, it might be better to use a two-step solution (Blanchet, 2008), then use the adjusted $R^2$ to see what it is like. First, we should do a global test to decide whether to move forward or not. If there is a significant result from this first test, we then continue with forward selection. This method of forward selection will have two rules that will be used for stopping: we use the significance threshold (e.g. \alpha = 0.05) as well as the adjusted $R^2$. We stop if adding a variable if there is no significant difference that is made. Each time we add a variable, we check that the model's $R^2$ is greater than the global model's $R^2$ or not. If it does, then with the smaller set of variables, we can see that there is more explanation than with more variables and therefore we should stop. This approach is available in \ordiR2step: 
+
+```{r}
+ordiR2step(lwr, upr, trace = FALSE)
+```
+### Permutation tests
+
+```{r}
+pstat <- permustats(anova(cca1))
+summary(pstat)
+
+densityplot(pstat)
+```
+
+Watch more of the video about ths at 1:20:00. 
+
+The order that the terms are added to the model is important. 
+
+```{r}
+set.seed(5)
+
+anova(mods, by = "terms")
+```
+
+Marginal effects of terms: given all the terms you have in the model, how much does each individual term contribute to the model? 
+
+```{r}
+set.seed(10)
+anova(mods, by = "margin")
+```
+
+## Example - spring meadow vegetation from webinar and Leps and Smilauer (2014)
+
+```{r}
+spp <- read.csv("../data/meadow-spp.csv", header = TRUE, row.names = 1)
+env <- read.csv("../data/meadow-env.csv", header = TRUE, row.names = 1)
+```
+
+The gradient is long, so a CCA is a good starting point: 
+
+```{r}
+decorana(spp) # check the gradient
+
+m1 <- cca(spp ~ ., data = env)
+m1
+set.seed(32)
+anova(m1)
+
+plot(m1)
+```
+
+The long gradient can be shown in the arch of the species data. The arch seems to be real. But rather than adding all variables, we would likely want to choose a set of the variables to use according to our hypotheses.
+
+```{r}
+set.seed(67) # any number can be used for the seed. The same set of permutations will then be used each time.
+lwr <- cca(spp ~ 1, data = env)
+
+( m2 <- ordistep(lwr, scope = formula(m1), trace = FALSE) )
+
+plot(m2)
+
+m2$anova # look at this to see the order of the parameters in the model
+```
+The first constrained eigenvalue is very large and therefore the first axis will explain almost half of the variance. There are some strong patterns in the residuals: the first 5 explain more variance than the second constrained variable. 
+
+The plot shows that ammonia and Corg are higher in the samples towards the bottom right. Conductivity is most important towards the left. The amount of iron is most important on the second axis. 
+
+If we are concerned that the arch shape is an artefact of a correspondance analysis, then we could use RDA with a transformation as an alternative method. The Hellinger distance would be used to calculate the chord distance between the species. This would likely show the same sorts of parameters in the model for species data. 
+
+```{r}
+spph <- decostand(spp, method = "hellinger")
+m3 <- rda(spph ~ ., data = env)
+m3
+
+lwr <- rda(spph ~ 1, data = env)
+m4 <- ordistep(lwr, scope = formula(m3), trace = FALSE)
+m4
+plot(m4)
+```
+
+We can also use the stepwise model (with two-step stopping method): 
+
+```{r}
+m5 <- ordiR2step(lwr, scope = formula(m3), trace = FALSE)
+m5
+
+plot(m5)
+```
+
+## Restricted permutation tests
+
+In permutation tests we are normally shuffling the species or residuals of a model. How the shuffling is done is also important. We often assumes that observations are independent, but this is often not the case if there is a blocking design, spatial or temporal correlation, etc. Therefore we have to be careful to preserve independence in the way in which it appears in the data. 
+
+Samples belong to a hierarchy: 
+- sample (individual sample)
+- plot (grouping of samples at an intermediate level)
+- block (grouping of samples at the outermost level)
+
+Key: blocks are never permuted. Samples are never swapped between blocks. We can have samples and plots within blocks. We can permute plots or samples within plots. 
+
+Permutations can be done in different ways according to what we want to achieve (see slide 70 for more information).
+
+We might want to consider observations from different blocks (e.g. different areas of sampling). Variation between blocks needs to be excluded using + Condition(blocks).
+
+Cyclic shifts can be used if there are equally spaced time series or transects. This works ok if there are no trends or cyclical patterns. Autocorrelation gets broken at these points. The effects of time series can be removed if need be, but not if we want to test for the significance of a trend. This is a similar idea for spatial grid arrangements as well.
+
+There are other methods (see slides).
+
+There are problems that the p-value can often not get very low. p = 1/number of observations. e.g. in a time series of 20 samples, the minimum value of p = 1/20 = 0.05. This should also take into account blocking so this can reduce the power even further. We must be able to detect an effect. It may be better to use an exact test (e.g. complete = TRUE in R). 
+
+Permutations are set up in R using how(). 
+
+```{r}
+plt <- gl(3, 10)
+h <- how(within = Within(type = "series"), plots = Plots(strata = plt))
+```
+
+### Time series example of permutations
+
+This is a time series of 10 plots with three observations each. 
+
+```{r}
+plt <- gl(3, 10)
+h <- how(within = Within(type = "series"), plots = Plots(strata = plt))
+set.seed(4)
+
+p <- shuffle(30, control = h)
+do.call("rbind", split(p, plt)) # this is what is being done for the shuffling. No need to do  this, it would be done in Vegan
+```
+In some cases we want to keep the shuffle constant: 
+
+```{r}
+plt <- gl(3, 10)
+h <- how(within = Within(type = "series", constant = TRUE), plots = Plots(strata = plt))
+set.seed(4)
+
+p <- shuffle(30, control = h)
+do.call("rbind", split(p, plt)) # this is what is being done for the shuffling. No need to do  this, it would be done in Vegan
+```
+
+## PERMANOVA
+
+Look at the slides for how this can be implemented in R (slide 110).
+
+The idea behind PERMANOVA is to look for the difference between the groups that we have identified using ordination. We will look for evidence if there is a difference between the observed difference of the means. 
